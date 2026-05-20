@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## v0.4.0 - 2026-05-20
+
+### 改善
+- SKILL.md: 全体手順の案内を HTTPS 方式 / SSH 方式の分岐フローに刷新
+- SKILL.md: Step 4b（WSL2）と Step 4c（複数アカウント）の位置づけを明確化
+- SKILL.md: Step 2a の `op item list` を API Credential カテゴリで絞り込む形に改善
+
+### 追加
+- SKILL.md: 解除手順に GitHub 側の PAT 削除 URL を追記
+- SKILL.md: 解除手順に GitHub 側の Deploy Key 削除 URL を追記
+
+---
+
 ## v0.3.0 - 2026-05-20
 
 ### 修正
