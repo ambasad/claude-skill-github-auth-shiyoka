@@ -1,5 +1,8 @@
 # github-auth-shiyoka
 
+> [!NOTE]
+> このスキルは現在テスト中です。不具合・改善点があれば Issue でお知らせください。
+
 Claude Code スキル — GitHubの認証ばセッティングしよか！
 
 Fine-grained PAT（リポジトリ単位の権限制御）を最優先とし、SSH 方式（Deploy Key / 1Password SSH Agent）や GCM にも対応する。
