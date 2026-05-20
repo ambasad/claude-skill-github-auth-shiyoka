@@ -38,7 +38,16 @@ Claude Code のプロンプトで以下を入力：
 /github-auth-shiyoka
 ```
 
-起動時に全体手順を案内し、環境に応じた方法で git の GitHub 認証を設定する。
+起動時に以下を自動チェックしてから、環境に応じた方法で git の GitHub 認証を設定する：
+
+- OS 種別（WSL2 / macOS / Linux）
+- SSH 疎通（`ssh.exe -T git@github.com`）
+- SSH config の設定状態
+- 1Password CLI (`op`) の有無とバージョン
+- 既存の credential helper 設定
+- 1Password SSH Agent の鍵一覧
+
+すでに完了しているステップは自動的にスキップして案内する。
 
 ### 認証方式（優先順位順）
 

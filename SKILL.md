@@ -1,6 +1,7 @@
 ---
 name: github-auth-shiyoka
 description: GitHubの認証ばセッティングしよか（1Password CLIがあれば自動取得、なければ手動入力）
+version: "0.2.0"
 ---
 
 # github-auth-shiyoka
@@ -988,4 +989,77 @@ git config --global --unset core.sshCommand
 ```
 
 > 1Password の SSH Key アイテム自体は削除不要（他の用途で再利用可能）。
+
+---
+
+## トラブルシューティング
+
+### `ssh -T git@github.com` で `Permission denied (publickey)` が出る
+
+原因と確認手順：
+
+```bash
+# SSH Agent に鍵が読み込まれているか確認
+ssh-add.exe -l   # WSL2
+ssh-add -l       # macOS / Linux
+```
+
+- **`Could not open connection to agent`** → 1Password の SSH Agent が無効。Settings → Developer → 「SSH エージェントを使用」をオン
+- **`The agent has no identities`** → 鍵が Agent に読み込まれていない。1Password で SSH Key アイテムを開いて「認証済みの鍵として追加」を確認
+- **鍵が表示されるが認証失敗** → GitHub に公開鍵が登録されていない。Step 4 の手順 3 で登録する
+
+### `op: command not found` が出る
+
+```bash
+# macOS
+brew install 1password-cli
+
+# Linux / WSL（公式ドキュメント参照）
+# https://developer.1password.com/docs/cli/get-started/
+```
+
+インストール後、`op --version` で動作確認してから再度スキルを実行する。
+
+### WSL2 で Windows 側 SSH config が反映されない
+
+`ssh.exe -G github.com | grep "^user "` で `user git` が返らない場合：
+
+```bash
+# Windows 側 config のパスを確認
+WIN_USERNAME=$(cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r')
+echo "/mnt/c/Users/$WIN_USERNAME/.ssh/config"
+
+# config の内容を確認
+cat "/mnt/c/Users/$WIN_USERNAME/.ssh/config"
+```
+
+`Host github.com` ブロックがなければ Step 4b の手順 3 を再実行する。
+
+### op のセッションタイムアウトで git 操作が失敗する
+
+デフォルト 30 分でセッションが切れ、以下のようなエラーが出る：
+
+```
+error: could not read Username for 'https://github.com'
+```
+
+再サインインで解決する：
+
+```bash
+eval "$(op signin)"
+```
+
+### WSL2 で `ssh.exe: command not found` が出る
+
+WSL interop が無効になっている。`/etc/wsl.conf` に以下を追加して WSL を再起動する：
+
+```ini
+[interop]
+enabled = true
+```
+
+```bash
+# WSL を再起動（PowerShell から）
+wsl --shutdown
+```
 
