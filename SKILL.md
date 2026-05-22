@@ -1,63 +1,18 @@
 ---
 name: github-auth-shiyoka
-description: GitHubの認証ばセッティングしよか（1Password CLIがあれば自動取得、なければ手動入力）
-version: "0.2.0"
+description: GitHub認証設定が必要な場合（git clone/push/pullで認証エラー時、または「GitHub認証」「PAT設定」「1Password GitHub」「GitHubセキュリティチェック」「認証の安全確認」などと言及されたとき）に自動で環境診断＋最適セキュア設定を行い、さらに既存トークンの有効期限・権限精査・セキュリティレポートを出力します。1Password Vault優先・Fine-grained PATを最優先にし、ディスク非保存を徹底。
+disable-model-invocation: true
+version: "0.6.0"
 ---
 
 # github-auth-shiyoka
 
-## スキルの入手方法
-
-`~/.claude/skills/` 配下に直接クローンする。
-クローン先を `github-auth-shiyoka` に指定することで、そのまま Claude Code に認識される。
-
-```bash
-git clone https://github.com/ambasad/claude-code-github-auth-shiyoka-skill.git ~/.claude/skills/github-auth-shiyoka
-```
-
-### スキルを最新に更新する場合
-
-```bash
-cd ~/.claude/skills/github-auth-shiyoka
-git pull
-```
-
----
-
-## 使い方
-
-Claude Code のプロンプトで以下のように入力する：
-
-```
-/github-auth-shiyoka
-```
-
-実行すると Claude が 1Password CLI (`op`) の有無を確認し、
-環境に応じた方法で git の GitHub 認証を設定する。
-
-### 事前準備（1Password CLI を使う場合）
-
-プロジェクトルートに `op.env` を作成しておく（なければスキル実行時に自動作成）：
-
-```bash
-GITHUB_USERNAME=<GitHubユーザー名>
-GITHUB_TOKEN=op://<Vault名>/<アイテム名>/credential
-```
-
-> **注意：** `op.env` には実際のトークンではなく 1Password の参照パスを記載する。
-> `.gitignore` に `op.env` を追加してリポジトリにコミットしないこと。
-
-### 設定後にできること
-
-- `git clone https://github.com/<組織>/<リポジトリ>.git` がそのまま動く
-- `git push` / `git pull` も認証なしで動く
-- 解除したい場合は再度 `/github-auth-shiyoka` を実行して解除手順を依頼する
-
----
-
-> **対応環境：** Windows 11 + WSL2 / macOS / Linux に対応している。
-> WSL2 の場合は WSL interop が有効で `ssh.exe` が WSL から呼び出せること。
-> SSH 方式（Step 4）は WSL2 専用の Step 4b と macOS / Linux 向けの Step 4 に分かれている。
+> **Agentic Skill** — デフォルトでは `disable-model-invocation: true` のため、`/github-auth-shiyoka` と明示的に入力して起動します。  
+> キーワード（「GitHub認証」「PAT設定」「git clone で認証エラー」など）を会話中に検出して **自動起動させたい場合** は、このファイルの frontmatter を以下のように変更してください：
+>
+> ```yaml
+> disable-model-invocation: false
+> ```
 
 git credential helper を設定し、以降の `git clone` / `git push` / `git pull` で
 GitHub 認証を自動的に行えるようにする。
@@ -71,7 +26,196 @@ GitHub 認証を自動的に行えるようにする。
 | 3 | SSH + 1Password SSH Agent | アカウント全体 | PAT 不要・秘密鍵ディスク非保存 |
 | 4 | GCM（Git Credential Manager） | アカウント全体 | OAuth 使用・OS キーチェーンに保存 |
 
-スキル起動時に、まず **事前チェック** を実行して現在の設定状態を把握してから、全体手順を案内する。
+---
+
+## セキュリティ監査モード（スキル起動時に常に最初に実行）
+
+スキル起動直後に以下の監査フローを実行し、**セキュリティレポートを出力**してから設定手順に進む。
+
+### 1. 現在の GitHub 認証状態を診断
+
+```bash
+# GitHub CLI による認証状態確認
+gh auth status 2>&1 || echo "gh コマンドが見つからないか未認証"
+
+# 現在の credential helper 確認
+echo "=== credential helper ==="
+git config --global credential.helper 2>/dev/null || echo "(グローバル未設定)"
+git config --local credential.helper 2>/dev/null || echo "(ローカル未設定)"
+git config --global credential.https://github.com.helper 2>/dev/null || echo "(github.com 専用未設定)"
+
+# OS 判定
+if grep -qi microsoft /proc/version 2>/dev/null; then
+  OS_TYPE="WSL2"
+elif [[ "$(uname)" == "Darwin" ]]; then
+  OS_TYPE="macOS"
+else
+  OS_TYPE="Linux"
+fi
+echo "OS: $OS_TYPE"
+```
+
+### 2. PAT 種別を確認（Fine-grained か Classic か）
+
+`gh auth status` の出力または以下のコマンドでトークン種別を確認する：
+
+```bash
+# 現在のトークンを gh から取得して種別判定
+gh auth token 2>/dev/null | head -c 20 || echo "(トークン取得不可)"
+# Fine-grained PAT は "github_pat_" で始まる
+# Classic PAT は "ghp_" で始まる
+# OAuth トークンは "gho_" で始まる
+```
+
+判定基準：
+- `github_pat_` → Fine-grained PAT（最推奨）
+- `ghp_` → Classic PAT（過剰権限の可能性あり → Fine-grained PAT への移行を推奨）
+- `gho_` → OAuth / GCM（アカウント全体アクセス）
+- 取得不可 → 未認証またはトークン管理外
+
+### 3. 有効期限を確認（期限切れ・30日以内の警告）
+
+```bash
+# 1Password に保存された PAT の有効期限を取得（op がある場合）
+if command -v op >/dev/null 2>&1; then
+  echo "=== 1Password: GitHub 関連アイテムの有効期限 ==="
+  op item list --categories "API Credential" --format=json 2>/dev/null \
+    | python3 -c "
+import json, sys, datetime
+items = json.load(sys.stdin)
+today = datetime.date.today()
+warn_days = 30
+for item in items:
+  title = item.get('title', '')
+  if 'github' in title.lower():
+    for field in item.get('fields', []):
+      if field.get('id') == 'expires' or field.get('label', '').lower() == 'expires':
+        val = field.get('value', '')
+        if val:
+          try:
+            exp = datetime.date.fromisoformat(val)
+            delta = (exp - today).days
+            if delta < 0:
+              print(f'🔴 期限切れ: {title} (期限: {val})')
+            elif delta <= warn_days:
+              print(f'⚠️  {delta}日後に期限切れ: {title} (期限: {val})')
+            else:
+              print(f'✅ 有効期限OK: {title} (期限: {val}, 残り{delta}日)')
+          except:
+            print(f'ℹ️  {title}: 期限値={val}')
+" 2>/dev/null || echo "(有効期限の自動取得失敗 - 手動で確認してください)"
+fi
+
+# gh CLI でトークン有効期限確認
+gh auth status 2>&1 | grep -i "expir\|token expir\|期限" || true
+```
+
+### 4. 権限スコープを精査（過剰権限の検出）
+
+```bash
+# gh CLI でスコープ確認
+gh auth status 2>&1 | grep -i "scope\|権限" || true
+
+# API で直接スコープ確認（Classic PAT / OAuth の場合）
+SCOPES=$(curl -sI -H "Authorization: token $(gh auth token 2>/dev/null)" \
+  https://api.github.com/user 2>/dev/null \
+  | grep -i "^x-oauth-scopes:" | cut -d: -f2- | tr -d ' \r')
+if [ -n "$SCOPES" ]; then
+  echo "現在のスコープ: $SCOPES"
+else
+  echo "(スコープ取得不可 - Fine-grained PAT またはトークン未設定の可能性)"
+fi
+```
+
+過剰権限の判定基準：
+- `repo`（フルアクセス）が設定されていて、Read のみで十分な場合 → Fine-grained PAT への移行推奨
+- `admin:org`・`delete_repo`・`workflow` が不要なのに含まれている → 即時削除推奨
+- Classic PAT でスコープが広い → Fine-grained PAT に移行して最小権限化
+
+### 5. 1Password Vault 連携状況を確認
+
+```bash
+# op CLI の有無とサインイン状態
+if command -v op >/dev/null 2>&1; then
+  echo "op version: $(op --version 2>/dev/null)"
+  op account list 2>/dev/null | head -5 || echo "(未サインイン)"
+  echo "=== GitHub 関連アイテム ==="
+  op item list --categories "API Credential" --format=json 2>/dev/null \
+    | python3 -c "
+import json, sys
+items = json.load(sys.stdin)
+found = [i['title'] for i in items if 'github' in i.get('title','').lower()]
+print('\n'.join(found) if found else '(GitHub関連アイテムなし)')
+" 2>/dev/null || echo "(取得失敗)"
+else
+  echo "op: not found（1Password CLI 未インストール）"
+fi
+
+# credential helper が op を使っているか確認
+git config --global credential.https://github.com.helper 2>/dev/null | grep -q "op read" \
+  && echo "✅ credential helper: 1Password CLI 連携済み" \
+  || echo "ℹ️  credential helper: 1Password CLI 未連携"
+```
+
+### 6. 総合セキュリティレポートを出力
+
+上記 1〜5 のチェック結果をもとに、以下の形式でセキュリティレポートを出力する：
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔐 GitHub 認証 セキュリティレポート
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【現在の認証状態】
+  - 認証方式: <Fine-grained PAT / Classic PAT / OAuth / 未認証>
+  - トークン種別: <github_pat_ / ghp_ / gho_ / なし>
+  - 1Password 連携: <済 / 未連携>
+
+【有効期限チェック】
+  - <✅ 有効期限OK / ⚠️ XX日後に期限切れ / 🔴 期限切れ>
+
+【権限スコープチェック】
+  - <✅ 最小権限 / ⚠️ 過剰権限あり（詳細） / ℹ️ スコープ不明>
+
+【問題点と即時対応策】
+  • <問題点があれば箇点で記載。なければ「問題なし」>
+  • <例: Classic PAT を使用中 → Fine-grained PAT への移行を推奨>
+  • <例: トークンが30日以内に期限切れ → Regenerate 手順を案内>
+  • <例: 1Password 未連携 → op.env 設定を推奨>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### 7. 必要ならトークン回転手順を提案
+
+以下の場合に、対応する回転手順を案内する：
+
+**PAT が期限切れ・30日以内の場合：**
+```
+【トークン回転手順】
+1. https://github.com/settings/personal-access-tokens を開く
+2. 対象 PAT の "Regenerate token" をクリック
+3. 新しいトークンをコピー
+4. 1Password を更新:
+   op item edit "<アイテム名>" --vault="<Vault名>" "credential[concealed]=<新トークン>"
+5. credential helper の再設定は不要（参照パスは変わらない）
+```
+
+**Classic PAT → Fine-grained PAT へ移行する場合：**
+```
+【移行手順】
+1. Step 1 の手順で Fine-grained PAT を新規作成
+2. 1Password に保存
+3. op.env の参照パスを更新
+4. 旧 Classic PAT を GitHub から削除:
+   https://github.com/settings/tokens
+```
+
+---
+
+セキュリティ監査完了後、続けて以下の **事前チェック** と **設定手順** を実行する。
+
+---
 
 ## 事前チェック（スキル起動時に必ず実行）
 
@@ -97,7 +241,6 @@ echo "OS: $OS_TYPE"
 if [[ "$OS_TYPE" == "WSL2" ]]; then
   SSH_CMD="ssh.exe"
   SSH_ADD_CMD="ssh-add.exe"
-  # WSL2: ssh.exe の存在確認
   command -v ssh.exe >/dev/null 2>&1 && echo "ssh.exe: OK" || echo "⚠️ ssh.exe が見つかりません（WSL interop が無効の可能性あり）"
 else
   SSH_CMD="ssh"
@@ -112,7 +255,6 @@ echo "--- SSH config (github.com) ---"
 $SSH_CMD -G github.com 2>/dev/null | grep -E "^(hostname|user) "
 
 if [[ "$OS_TYPE" == "WSL2" ]]; then
-  # WSL2: Windows 側 config も確認
   echo "--- Windows SSH config ---"
   ssh.exe -G github.com 2>/dev/null | grep -E "^(hostname|user) "
   if ssh.exe -G github.com 2>/dev/null | grep -q "^user git$"; then
@@ -324,7 +466,6 @@ eval "$(op signin)"
 git config --global user.name 2>/dev/null
 
 # 1Password の GitHub 関連アイテムを候補として取得（サインイン済みの場合）
-# API Credential カテゴリで github を含むアイテムを絞り込み
 op item list --categories "API Credential" --format=json 2>/dev/null \
   | grep -i '"title"' | grep -i github
 
@@ -457,8 +598,6 @@ GCM（Git Credential Manager）を使って認証を設定する。
 
 ### 3. SSH config にリポジトリ専用エイリアスを設定する
 
-複数の Deploy Key を使い分けるため、リポジトリごとに Host エイリアスを作成する。
-
 ```bash
 ALIAS="github-<リポジトリ名>"  # 例: github-my-repo
 
@@ -496,7 +635,6 @@ ssh -T git@github-<リポジトリ名>
 ssh.exe -T git@github-<リポジトリ名>
 
 # 成功時: Hi <org>/<repo>! You've successfully authenticated...
-#（Deploy Key の場合はリポジトリ名が表示される）
 ```
 
 ### 使い方
@@ -567,7 +705,6 @@ chmod 600 ~/.ssh/config
 
 > `~/.1password/agent.sock` は 1Password デスクトップアプリが自動作成するソケットファイル。
 > 1Password の Settings → Developer に表示されるパスと一致しない場合はそちらを使うこと。
-> このコマンドは何度実行しても重複しない（冪等）。
 
 ### 5. SSH Agent の鍵を確認
 
@@ -625,7 +762,6 @@ WIN_USERNAME=$(cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r' || echo "$U
 WIN_CONFIG="/mnt/c/Users/$WIN_USERNAME/.ssh/config"
 LINUX_CONFIG="$HOME/.ssh/config"
 
-# github.com ブロックを安全に追記する関数（重複削除 + 改行保証）
 apply_ssh_config() {
   local cfg="$1"
   mkdir -p "$(dirname "$cfg")"
@@ -777,8 +913,6 @@ ssh.exe -T git@github-<ユーザー名>
 
 ### 使い方
 
-追加アカウントのリポジトリを操作する際は、SSH URL のホスト名を `github.com` の代わりにエイリアスに変更する：
-
 ```bash
 # 追加アカウントでクローン
 git clone git@github-<ユーザー名>:<リポジトリ名>.git
@@ -797,8 +931,6 @@ git clone git@github.com:<org>/<repo>.git
 ## Step 5: 動作確認
 
 **HTTPS 方式（Step 2a: op）の場合：**
-
-op 方式はサインインしてから確認する：
 
 ```bash
 eval "$(op signin)"
@@ -873,8 +1005,6 @@ git clone https://github.com/<組織名>/<リポジトリ名>.git
 
 ## プロジェクトごとの認証設定を保存する
 
-認証方式によって「設定の保存先」が異なる。
-
 | 方式 | 保存先 | チーム共有 |
 |---|---|---|
 | SSH（Deploy Key / 複数アカウント） | remote URL（`.git/config`） | ✅ git remote に記録される |
@@ -883,30 +1013,19 @@ git clone https://github.com/<組織名>/<リポジトリ名>.git
 
 ### SSH 方式：remote URL が設定を保持する
 
-Deploy Key や複数アカウントで Host エイリアスを使っている場合、remote URL を正しく設定するだけで完結する。
-
 ```bash
 git remote set-url origin git@github-<リポジトリ名 or ユーザー名>:<org>/<repo>.git
 ```
 
-`.git/config` に記録されるため、`git push/pull` が常に正しい鍵を使う。追加設定不要。
-
 ### HTTPS + PAT 方式：op.env + git config --local
 
-プロジェクトルートで以下を実行する：
-
 ```bash
-# プロジェクトローカルの credential helper を設定（グローバル設定を上書き）
 set -a && source op.env && set +a
 git config --local credential.https://github.com.helper \
   "!f() { echo username=$GITHUB_USERNAME; echo password=\$(op read \"$GITHUB_TOKEN\"); }; f"
 ```
 
-`--local` を使うことで `.git/config` に書き込まれ、このリポジトリだけに適用される。
-
 ### op.env.example をリポジトリにコミットする
-
-実際の値は `.gitignore` で除外しつつ、テンプレートをコミットしておくと他のメンバーが `cp` するだけで使える：
 
 ```bash
 # op.env.example（リポジトリにコミットする）
@@ -915,11 +1034,8 @@ GITHUB_TOKEN=op://<Vault名>/<アイテム名>/credential
 ```
 
 ```bash
-# .gitignore に追加
 echo 'op.env' >> .gitignore
 ```
-
-> `op.env.example` を見れば必要な値が一目でわかる。実際のトークンは 1Password にのみ保存されるため、誤ってコミットしても漏洩しない。
 
 ---
 
@@ -931,39 +1047,31 @@ echo 'op.env' >> .gitignore
 git config --global --unset credential.https://github.com.helper
 ```
 
-> PAT 自体を無効化する場合は GitHub 側からも削除すること：
-> `https://github.com/settings/personal-access-tokens`
+> PAT 自体を無効化する場合：`https://github.com/settings/personal-access-tokens`
 
 **HTTPS 方式（Step 2b: GCM）の場合：**
 
 ```bash
-# キャッシュを削除
 git credential reject <<EOF
 protocol=https
 host=github.com
 EOF
-
-# または GCM の logout コマンド
 git-credential-manager github logout
 ```
 
 **Deploy Key / 複数アカウント（Step 3 / 4c）の Host エイリアスを解除する場合：**
 
 ```bash
-ALIAS="github-<名前>"  # 例: github-my-repo, github-myuser
-
-# macOS / Linux
+ALIAS="github-<名前>"
 sed -i "/^Host $ALIAS/,/^$/d" ~/.ssh/config 2>/dev/null || true
 
-# WSL2: Windows 側も削除
 if grep -qi microsoft /proc/version 2>/dev/null; then
   WIN_USERNAME=$(cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r' || echo "$USER")
   sed -i "/^Host $ALIAS/,/^$/d" "/mnt/c/Users/$WIN_USERNAME/.ssh/config" 2>/dev/null || true
 fi
 ```
 
-> Deploy Key の場合は GitHub 側からも削除すること：
-> `https://github.com/<org>/<repo>/settings/keys`
+> Deploy Key の場合は GitHub 側からも削除：`https://github.com/<org>/<repo>/settings/keys`
 
 **SSH + 1Password Agent（Step 4 / macOS・Linux）の場合：**
 
@@ -976,19 +1084,11 @@ sed -i '/^Host github\.com/,/^$/d' ~/.ssh/config 2>/dev/null || true
 
 ```bash
 cp ~/.ssh/config ~/.ssh/config.bak 2>/dev/null || true
-
-# Linux 側
 sed -i '/^Host github\.com/,/^$/d' ~/.ssh/config 2>/dev/null || true
-
-# Windows 側
 WIN_USERNAME=$(cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r' || echo "$USER")
 sed -i '/^Host github\.com/,/^$/d' "/mnt/c/Users/$WIN_USERNAME/.ssh/config" 2>/dev/null || true
-
-# git の SSH コマンド設定を解除
 git config --global --unset core.sshCommand
 ```
-
-> 1Password の SSH Key アイテム自体は削除不要（他の用途で再利用可能）。
 
 ---
 
@@ -996,40 +1096,26 @@ git config --global --unset core.sshCommand
 
 ### `ssh -T git@github.com` で `Permission denied (publickey)` が出る
 
-原因と確認手順：
-
 ```bash
-# SSH Agent に鍵が読み込まれているか確認
 ssh-add.exe -l   # WSL2
 ssh-add -l       # macOS / Linux
 ```
 
-- **`Could not open connection to agent`** → 1Password の SSH Agent が無効。Settings → Developer → 「SSH エージェントを使用」をオン
-- **`The agent has no identities`** → 鍵が Agent に読み込まれていない。1Password で SSH Key アイテムを開いて「認証済みの鍵として追加」を確認
-- **鍵が表示されるが認証失敗** → GitHub に公開鍵が登録されていない。Step 4 の手順 3 で登録する
+- **`Could not open connection to agent`** → 1Password Settings → Developer → SSH エージェントをオン
+- **`The agent has no identities`** → 1Password で SSH Key アイテムを開いて「認証済みの鍵として追加」を確認
+- **鍵が表示されるが認証失敗** → GitHub に公開鍵未登録。Step 4 の手順 3 で登録する
 
 ### `op: command not found` が出る
 
 ```bash
-# macOS
-brew install 1password-cli
-
-# Linux / WSL（公式ドキュメント参照）
-# https://developer.1password.com/docs/cli/get-started/
+brew install 1password-cli          # macOS
+# Linux / WSL: https://developer.1password.com/docs/cli/get-started/
 ```
-
-インストール後、`op --version` で動作確認してから再度スキルを実行する。
 
 ### WSL2 で Windows 側 SSH config が反映されない
 
-`ssh.exe -G github.com | grep "^user "` で `user git` が返らない場合：
-
 ```bash
-# Windows 側 config のパスを確認
 WIN_USERNAME=$(cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r')
-echo "/mnt/c/Users/$WIN_USERNAME/.ssh/config"
-
-# config の内容を確認
 cat "/mnt/c/Users/$WIN_USERNAME/.ssh/config"
 ```
 
@@ -1037,29 +1123,43 @@ cat "/mnt/c/Users/$WIN_USERNAME/.ssh/config"
 
 ### op のセッションタイムアウトで git 操作が失敗する
 
-デフォルト 30 分でセッションが切れ、以下のようなエラーが出る：
-
-```
-error: could not read Username for 'https://github.com'
-```
-
-再サインインで解決する：
-
 ```bash
 eval "$(op signin)"
 ```
 
 ### WSL2 で `ssh.exe: command not found` が出る
 
-WSL interop が無効になっている。`/etc/wsl.conf` に以下を追加して WSL を再起動する：
-
 ```ini
+# /etc/wsl.conf に追加して wsl --shutdown で再起動
 [interop]
 enabled = true
 ```
 
-```bash
-# WSL を再起動（PowerShell から）
-wsl --shutdown
-```
+---
 
+## セキュリティ監査完了＋設定完了 まとめ
+
+すべての手順が完了したら、以下のまとめを出力する：
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ セキュリティ監査完了＋GitHub認証設定完了
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【設定した認証方式】
+  <設定した方式を記載>
+
+【セキュリティ状態】
+  - トークン種別: <Fine-grained PAT / Deploy Key / SSH / GCM>
+  - 1Password Vault 連携: <済 / 未連携>
+  - ディスク平文保存: なし（1Password 管理）
+  - 権限スコープ: <リポジトリ単位 / アカウント全体>
+  - 有効期限: <期限と残日数>
+
+【次回の確認推奨事項】
+  • PAT の有効期限が近づいたら Regenerate token → 1Password を更新
+  • 不要になったトークンは https://github.com/settings/personal-access-tokens から削除
+  • 定期的に /github-auth-shiyoka を実行してセキュリティ監査を継続
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```

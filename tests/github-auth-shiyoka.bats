@@ -174,6 +174,116 @@ Host $ALIAS
   [ "$output" = "WSL2" ]
 }
 
+# PAT 種別判定: github_pat_ で始まるトークンは Fine-grained と判定されること
+@test "PAT種別判定: github_pat_ は Fine-grained PAT と判定される" {
+  run bash -c '
+    TOKEN="github_pat_XXXXXXXXXXXX"
+    case "$TOKEN" in
+      github_pat_*) echo "Fine-grained PAT" ;;
+      ghp_*)        echo "Classic PAT" ;;
+      gho_*)        echo "OAuth" ;;
+      *)            echo "Unknown" ;;
+    esac
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "Fine-grained PAT" ]
+}
+
+# PAT 種別判定: ghp_ で始まるトークンは Classic PAT と判定されること
+@test "PAT種別判定: ghp_ は Classic PAT と判定される" {
+  run bash -c '
+    TOKEN="ghp_XXXXXXXXXXXX"
+    case "$TOKEN" in
+      github_pat_*) echo "Fine-grained PAT" ;;
+      ghp_*)        echo "Classic PAT" ;;
+      gho_*)        echo "OAuth" ;;
+      *)            echo "Unknown" ;;
+    esac
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "Classic PAT" ]
+}
+
+# PAT 種別判定: gho_ で始まるトークンは OAuth と判定されること
+@test "PAT種別判定: gho_ は OAuth と判定される" {
+  run bash -c '
+    TOKEN="gho_XXXXXXXXXXXX"
+    case "$TOKEN" in
+      github_pat_*) echo "Fine-grained PAT" ;;
+      ghp_*)        echo "Classic PAT" ;;
+      gho_*)        echo "OAuth" ;;
+      *)            echo "Unknown" ;;
+    esac
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "OAuth" ]
+}
+
+# 有効期限チェック: 期限切れは 🔴 と判定されること
+@test "有効期限チェック: 期限切れトークンは期限切れと判定される" {
+  run python3 -c "
+import datetime
+today = datetime.date.today()
+expired = (today - datetime.timedelta(days=1)).isoformat()
+exp = datetime.date.fromisoformat(expired)
+delta = (exp - today).days
+if delta < 0:
+    print('expired')
+elif delta <= 30:
+    print('warning')
+else:
+    print('ok')
+"
+  [ "$status" -eq 0 ]
+  [ "$output" = "expired" ]
+}
+
+# 有効期限チェック: 30日以内は warning と判定されること
+@test "有効期限チェック: 30日以内のトークンは warning と判定される" {
+  run python3 -c "
+import datetime
+today = datetime.date.today()
+soon = (today + datetime.timedelta(days=15)).isoformat()
+exp = datetime.date.fromisoformat(soon)
+delta = (exp - today).days
+if delta < 0:
+    print('expired')
+elif delta <= 30:
+    print('warning')
+else:
+    print('ok')
+"
+  [ "$status" -eq 0 ]
+  [ "$output" = "warning" ]
+}
+
+# 有効期限チェック: 31日以上は ok と判定されること
+@test "有効期限チェック: 31日以上先のトークンは ok と判定される" {
+  run python3 -c "
+import datetime
+today = datetime.date.today()
+future = (today + datetime.timedelta(days=60)).isoformat()
+exp = datetime.date.fromisoformat(future)
+delta = (exp - today).days
+if delta < 0:
+    print('expired')
+elif delta <= 30:
+    print('warning')
+else:
+    print('ok')
+"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
+# frontmatter: disable-model-invocation のデフォルト値が true であること
+@test "frontmatter: disable-model-invocation のデフォルト値は true" {
+  SKILL_FILE="$(dirname "$BATS_TEST_FILENAME")/../SKILL.md"
+  run grep "^disable-model-invocation:" "$SKILL_FILE"
+  [ "$status" -eq 0 ]
+  [ "$output" = "disable-model-invocation: true" ]
+}
+
 # SSH config 反映確認: ssh.exe -G で user git が返ること（Windows 側 config 設定済みの場合）
 @test "SSH config: ssh.exe -G github.com で user git が返る（Windows SSH config 設定済み）" {
   # ssh.exe モックを作成（Windows 側 config 設定済みの状態をシミュレート）

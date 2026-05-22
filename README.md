@@ -1,12 +1,19 @@
 # claude-code-github-auth-shiyoka-skill
 
 > [!NOTE]
-> **v0.5.0** — 開発初期段階です。主要な認証フローは動作確認済みですが、環境によって想定外の問題が発生する可能性があります。不具合・改善点は Issue でお知らせください。
+> **v0.6.0** — 開発初期段階です。主要な認証フローは動作確認済みですが、環境によって想定外の問題が発生する可能性があります。不具合・改善点は Issue でお知らせください。
 
 Claude Code 用 GitHub 認証スキル — GitHubの認証ばセッティングしよか！
 
 「しよか（しようか）」で、GitHub 認証をサクッと完了させるスキルです。  
 Fine-grained PAT（リポジトリ単位の権限制御）を最優先とし、SSH 方式（Deploy Key / 1Password SSH Agent）や GCM にも対応する。
+
+> [!TIP]
+> **Agentic Skill 対応** — デフォルトでは `/github-auth-shiyoka` と入力して起動します。  
+> 「GitHub認証」「PAT設定」「git clone で認証エラー」などのキーワードを会話中に検出して **自動起動させたい場合** は、`~/.claude/skills/github-auth-shiyoka/SKILL.md` の frontmatter を変更してください：
+> ```yaml
+> disable-model-invocation: false
+> ```
 
 ## 前提条件
 
@@ -47,7 +54,19 @@ Claude Code のプロンプトで以下を入力：
 /github-auth-shiyoka
 ```
 
-起動時に以下を自動チェックしてから、環境に応じた方法で git の GitHub 認証を設定する：
+起動時に **セキュリティ監査** を自動実行してからセットアップに進む：
+
+**セキュリティ監査モード（常に最初に実行）**
+
+1. 現在の GitHub 認証状態を診断（`gh auth status`）
+2. PAT 種別を確認（Fine-grained か Classic か）
+3. 有効期限を確認（期限切れ・30日以内の警告）
+4. 権限スコープを精査（過剰権限があれば最小権限推奨を表示）
+5. 1Password Vault 連携状況を確認
+6. 総合セキュリティレポートを出力（問題点・即時対応策を箇点で）
+7. 必要ならトークン回転手順を提案
+
+その後、以下を自動チェックして環境に応じた設定を行う：
 
 - OS 種別（WSL2 / macOS / Linux）
 - SSH 疎通（`ssh.exe -T git@github.com`）

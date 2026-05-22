@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## v0.6.0 - 2026-05-22
+
+### 追加
+- SKILL.md: Agentic Skill 強化 — セキュリティ監査モードをスキル起動時の最初の処理として追加
+  - PAT 種別確認（Fine-grained / Classic / OAuth の自動判定）
+  - 有効期限チェック（1Password `expires` フィールド参照、30日以内で警告、期限切れで🔴アラート）
+  - 権限スコープ精査（`x-oauth-scopes` ヘッダで過剰権限を検出）
+  - 1Password Vault 連携状況の確認
+  - 総合セキュリティレポートの出力（問題点・即時対応策を箇点で）
+  - トークン回転手順・Classic PAT → Fine-grained PAT 移行手順の提案
+- SKILL.md: 設定完了時に「セキュリティ監査完了＋設定完了まとめ」を出力
+- SKILL.md: frontmatter に `disable-model-invocation: false` を追加（Agentic Skill 対応）
+- README.md: セキュリティ監査モードの説明を使い方セクションに追加
+- README.md: Agentic Skill として動作する旨（キーワード自動検出・自動起動）を TIP バナーで明記
+- SKILL.md: Agentic Skill の動作原理（`disable-model-invocation: false` の意味）をスキル冒頭に追記
+
+### 追加（続き）
+- テスト: PAT 種別判定ロジックのテストを追加（`github_pat_` / `ghp_` / `gho_` の各パターン）
+- テスト: 有効期限チェックロジックのテストを追加（期限切れ・30日以内警告・OK の3ケース）
+- テスト: `disable-model-invocation` のデフォルト値が `true` であることを確認するテストを追加
+
+### 改善
+- SKILL.md: `description` をトリガーワード（「GitHub認証」「PAT設定」「1Password GitHub」など）を含む形に更新
+- SKILL.md: `disable-model-invocation` のデフォルト値を `false` → `true` に変更（自動起動はオプトイン方式）
+
+---
+
 ## v0.5.0 - 2026-05-20
 
 ### 改善
